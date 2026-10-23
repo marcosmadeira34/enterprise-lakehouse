@@ -1,0 +1,81 @@
+{
+  "timestamp": "2026-10-23T17:52:50+00:00",
+  "parameters": {
+    "scale": "large",
+    "files_per_entity": 8,
+    "shuffle_partitions": 24,
+    "master": "local[6]",
+    "driver_memory": "8g",
+    "error_rate": 0.01,
+    "store_skew": 0.0,
+    "seed": 42,
+    "keep": false,
+    "output": null
+  },
+  "environment": {
+    "host": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "cpu_model": "13th Gen Intel(R) Core(TM) i7-13620H",
+    "logical_cpus": 8,
+    "ram_gib": 23.5,
+    "python": "3.12.3",
+    "pyspark": "3.5.7",
+    "storage": "local filesystem (Delta) + SQLite metadata"
+  },
+  "volume": {
+    "source_files": 64,
+    "source_records": 2775365,
+    "landing_bytes": 231911845,
+    "lake_bytes": 565255845,
+    "sizes": {
+      "customers": 50000,
+      "products": 5000,
+      "categories": 40,
+      "stores": 100,
+      "sales": 500000,
+      "inventory_days": 7
+    }
+  },
+  "stages_seconds": {
+    "generate": 31.011,
+    "spark_startup": 2.484,
+    "ingest": 0.416,
+    "bronze": 52.985,
+    "silver": 81.629,
+    "gold": 28.971,
+    "quality": 17.273,
+    "reconcile": 27.095
+  },
+  "throughput_records_per_second": {
+    "bronze": 52380.2,
+    "silver": 33999.7,
+    "ingest_to_gold": 16922.9
+  },
+  "records": {
+    "bronze": 2775365,
+    "silver_read": 2775365,
+    "silver_rejected": 114694,
+    "expected_rejected": 114694,
+    "gold_rows": {
+      "gold.dim_date": 65,
+      "gold.dim_customer": 50502,
+      "gold.dim_product": 5000,
+      "gold.dim_store": 100,
+      "gold.fact_sales_item": 1245239,
+      "gold.fact_inventory_snapshot": 140000,
+      "gold.agg_daily_sales": 6404
+    }
+  },
+  "gold_matches_oracle": {
+    "fact_rows": true
+  },
+  "outcome": {
+    "quality": {
+      "PASSED": 32,
+      "WARNED": 5
+    },
+    "reconciliation": {
+      "PASSED": 20
+    }
+  },
+  "peak_rss_mib": 6751.8
+}

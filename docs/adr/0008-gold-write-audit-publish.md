@@ -13,8 +13,9 @@ them, and must never be exposed half-written.
 * Consumers (the API) always read the versions of the latest `PUBLISHED` row via Delta time travel.
 
 ## Consequences
-* Full rebuild cost grows with history. At the measured scales it is a few seconds (`docs/benchmark.md`).
-  The evolution path is incremental rebuild of affected `sale_date` partitions using Silver's change data
-  feed (already enabled on Silver tables).
+* Full rebuild cost grows with history. Measured (`docs/benchmark.md`): the Gold step, audit included,
+  took 22–27 s both for ~10 k and ~306 k source records — fixed per-table overhead dominates at these
+  volumes. The evolution path is incremental rebuild of affected `sale_date` partitions using Silver's
+  change data feed (already enabled on Silver tables).
 * `VACUUM` must keep files of the published versions (default retention 7 days; no automatic vacuum runs).
 * Cost uses the current product cost (SCD type 1); historical cost needs an SCD2 product dimension.

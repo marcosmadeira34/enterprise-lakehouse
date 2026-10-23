@@ -157,10 +157,10 @@ FROM run_errors e JOIN pipeline_runs r USING (run_id) ORDER BY e.id DESC LIMIT 2
 ## Tests
 
 ```bash
-make test-fast          # unit, no Spark (~1 s)
-make test-spark         # + Spark unit and local pipeline integration (~3 min)
-make test-resilience    # failure injection (~4 min)
+make test-fast          # unit, no Spark: 46 tests, ~2 s
+make test-spark         # Spark unit + local pipeline integration: 32 tests, ~3 min
+make test-resilience    # failure injection: 8 tests, ~3 min
 make test               # everything without Docker
-make up && make test-integration   # against PostgreSQL + MinIO in Docker
+make up && make test-integration   # against PostgreSQL + MinIO in Docker: 4 tests, ~2.5 min
 make lint typecheck
 ```

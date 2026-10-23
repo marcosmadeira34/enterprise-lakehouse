@@ -14,11 +14,12 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
     TZ=UTC
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
+# UV_PYTHON is the base interpreter of the official image (Airflow itself lives in a venv at
+# /home/airflow/.local, which the lakehouse venv must not share).
 ENV UV_PROJECT_ENVIRONMENT=/opt/lakehouse/venv \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
-    # Base interpreter of the official image (Airflow itself lives in a venv at /home/airflow/.local).
     UV_PYTHON=/usr/python/bin/python3.12
 
 WORKDIR /opt/lakehouse/app
