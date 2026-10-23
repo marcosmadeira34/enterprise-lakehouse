@@ -87,6 +87,21 @@ def test_gold_matches_oracle_and_is_published(env: dict[str, Any]) -> None:
     assert "email" not in customers.columns and "first_name" not in customers.columns  # no PII in Gold
 
 
+def test_api_serves_spark_written_gold(env: dict[str, Any]) -> None:
+    from fastapi.testclient import TestClient
+
+    from lakehouse.api.app import create_app
+
+    client = TestClient(create_app(env["settings"], env["repo"]))
+    total = client.get("/analytics/sales-summary", params={"group_by": "total"}).json()["items"][0]
+    assert total["net_revenue"] == env["manifest"]["expected"]["gold"]["net_revenue"]
+    assert total["orders"] == env["manifest"]["expected"]["gold"]["orders"]
+    gold_runs = client.get("/runs", params={"pipeline": "gold", "status": "SUCCEEDED"}).json()
+    assert gold_runs["total"] == 1
+    blocking = client.get("/quality/results", params={"severity": "BLOCKING", "status": "FAILED"}).json()
+    assert blocking["total"] == 0
+
+
 def test_reconciliation_and_batch_accounting(env: dict[str, Any]) -> None:
     assert env["first"]["reconcile"]["results"]["not_passed"] == []
     for row in env["repo"].layer_rows("silver"):

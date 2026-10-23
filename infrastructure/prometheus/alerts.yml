@@ -1,0 +1,48 @@
+groups:
+  - name: lakehouse
+    rules:
+      - alert: LakehousePipelineFailed
+        expr: lakehouse_last_run_failed == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Last {{ $labels.pipeline }} run failed"
+          description: "Inspect with GET /runs?status=FAILED or `lakehouse runs`."
+
+      - alert: LakehouseBlockingQualityRuleFailed
+        expr: lakehouse_quality_rule_status{severity="BLOCKING"} >= 2
+        labels:
+          severity: critical
+        annotations:
+          summary: "Blocking rule {{ $labels.rule_id }} failed on {{ $labels.table }}"
+
+      - alert: LakehouseQualityWarning
+        expr: lakehouse_quality_rule_status{severity="WARNING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rule {{ $labels.rule_id }} reports {{ $value }} (warning) on {{ $labels.table }}"
+
+      - alert: LakehouseFilesQuarantined
+        expr: sum by (entity) (lakehouse_files{status="QUARANTINED"}) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} quarantined file(s) for {{ $labels.entity }}"
+
+      - alert: LakehouseGoldStale
+        expr: lakehouse_gold_publication_age_seconds > 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "Published Gold version is older than 24h"
+
+      - alert: LakehouseMetricsDown
+        expr: up{job="lakehouse"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Lakehouse API metrics endpoint is down"

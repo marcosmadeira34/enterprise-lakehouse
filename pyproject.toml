@@ -98,4 +98,6 @@ markers = [
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:pyspark.*",
+    # Third-party notice from starlette's TestClient about its HTTP backend; not actionable here.
+    "ignore:Using `httpx` with `starlette.testclient`",
 ]

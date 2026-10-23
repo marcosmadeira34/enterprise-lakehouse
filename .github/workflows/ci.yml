@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.12.5"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --all-extras --frozen --python ${{ env.PYTHON_VERSION }}
+      - name: ruff
+        run: |
+          uv run ruff check src tests dags scripts
+          uv run ruff format --check src tests dags scripts
+      - name: mypy
+        run: uv run mypy
+      - name: generated docs are up to date
+        run: uv run python scripts/gen_docs.py --check
+      - name: compose file is valid
+        run: cp .env.example .env && docker compose config -q
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ivy2
+          key: ivy-delta-3.3.2-hadoop-aws-3.3.4
+      - run: uv sync --all-extras --frozen --python ${{ env.PYTHON_VERSION }}
+      - name: unit (no Spark)
+        run: uv run pytest tests/unit -m "not spark"
+      - name: Spark unit + local pipeline integration
+        run: uv run pytest tests/unit tests/integration -m "spark and not integration"
+      - name: resilience
+        run: uv run pytest tests/resilience
+
+  integration:
+    runs-on: ubuntu-24.04
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ivy2
+          key: ivy-delta-3.3.2-hadoop-aws-3.3.4
+      - run: uv sync --all-extras --frozen --python ${{ env.PYTHON_VERSION }}
+      - name: start PostgreSQL and MinIO
+        run: |
+          python3 scripts/make_env.py
+          docker compose up -d --wait postgres minio
+      - name: integration tests against the services
+        run: |
+          set -a && source .env && set +a
+          uv run pytest -m integration tests/integration -o addopts="-ra"
+      - name: service logs on failure
+        if: failure()
+        run: docker compose logs postgres minio

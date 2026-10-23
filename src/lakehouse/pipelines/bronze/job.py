@@ -257,7 +257,12 @@ def process_batch(
         comment=f"Bronze {contract.name}: raw records as received, with ingestion lineage.",
     )
     version = find_commit(spark, path, "batch_id", batch_id)
-    if version is not None:
+    # Fallback for a history already truncated by log retention: the rows themselves carry the batch id
+    # (pruned by the ingestion-date partition, so this reads at most one partition).
+    already_written = (
+        version is not None or batch_rows(spark, settings, contract.name, batch).limit(1).count() > 0
+    )
+    if already_written:
         result.recovered = True
         log_event(log, "bronze_commit_recovered", logging.WARNING, batch_id=batch_id, delta_version=version)
     else:

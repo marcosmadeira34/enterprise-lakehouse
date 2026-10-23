@@ -1,0 +1,201 @@
+name: enterprise-lakehouse
+
+# Shared settings for every container that runs lakehouse code (Airflow workers, init job).
+x-lakehouse-env: &lakehouse-env
+  LAKEHOUSE_CONFIG: /opt/lakehouse/app/config/lakehouse.yaml
+  LAKEHOUSE__ENVIRONMENT: docker
+  LAKEHOUSE__STORAGE__LANDING_URI: s3://landing/retail
+  LAKEHOUSE__STORAGE__LAKE_URI: s3://lakehouse
+  LAKEHOUSE__STORAGE__S3_ENDPOINT_URL: http://minio:9000
+  LAKEHOUSE__METADATA__URL: postgresql+psycopg://lakehouse:${LAKEHOUSE_DB_PASSWORD}@postgres:5432/lakehouse
+  LAKEHOUSE__SPARK__IVY_DIR: /opt/lakehouse/ivy
+  LAKEHOUSE__SPARK__DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-2g}
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  AWS_REGION: us-east-1
+  TZ: UTC
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: infrastructure/docker/airflow/Dockerfile
+  image: enterprise-lakehouse-airflow:local
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    <<: *lakehouse-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    # Two concurrent Spark tasks at most: each is a local JVM inside this container.
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "2"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    # WSL clocks can jump several seconds; the default 10 s leeway makes tasks fail with "iat" errors.
+    AIRFLOW__API_AUTH__JWT_LEEWAY: "60"
+    AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    LAKEHOUSE_BIN: /opt/lakehouse/venv/bin/lakehouse
+  volumes:
+    - ./dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-depends
+    postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  networks: [lakehouse]
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      LAKEHOUSE_DB_PASSWORD: ${LAKEHOUSE_DB_PASSWORD}
+      LAKEHOUSE_READER_PASSWORD: ${LAKEHOUSE_READER_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - ./infrastructure/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -d lakehouse -c 'select 1' >/dev/null"]
+      interval: 5s
+      retries: 20
+    networks: [lakehouse]
+
+  minio:
+    # Upstream MinIO no longer publishes images; this is the last Bitnami build (see docs/adr/0006).
+    image: bitnamilegacy/minio:2025.7.23
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: landing,lakehouse
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-19010}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-19011}:9001"
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      retries: 20
+    networks: [lakehouse]
+
+  # Creates the metadata schema and storage containers (idempotent).
+  lakehouse-init:
+    <<: *airflow-common
+    entrypoint: ["/opt/lakehouse/venv/bin/lakehouse"]
+    command: ["init"]
+    restart: "no"
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-18088}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 15s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+      lakehouse-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+      lakehouse-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api/Dockerfile
+    image: enterprise-lakehouse-api:local
+    environment:
+      LAKEHOUSE__STORAGE__LAKE_URI: s3://lakehouse
+      LAKEHOUSE__STORAGE__LANDING_URI: s3://landing/retail
+      LAKEHOUSE__STORAGE__S3_ENDPOINT_URL: http://minio:9000
+      # Read-only database role: the API cannot modify operational metadata.
+      LAKEHOUSE__METADATA__URL: postgresql+psycopg://lakehouse_reader:${LAKEHOUSE_READER_PASSWORD}@postgres:5432/lakehouse
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: us-east-1
+    ports:
+      - "127.0.0.1:${API_PORT:-18000}:8000"
+    depends_on:
+      lakehouse-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [lakehouse]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./infrastructure/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-19090}:9090"
+    depends_on: [api]
+    networks: [lakehouse]
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-13000}:3000"
+    depends_on: [prometheus]
+    networks: [lakehouse]
+
+networks:
+  lakehouse:
+
+volumes:
+  postgres-data:
+  minio-data:
+  airflow-logs:
+  prometheus-data:
+  grafana-data:
